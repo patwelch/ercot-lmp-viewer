@@ -15,7 +15,7 @@ A simple, interactive appliction for retreviing and visualizing **Location Margi
 ---
 
 ## 📂 Project Strucutre
-
+'
 ercot-lmp-viewer/
 │├── app/        #Strealit App Code
 │└── ercot_lmp_app.py
@@ -23,6 +23,7 @@ ercot-lmp-viewer/
 │├── requirements.txt       # Dependencies
 │├── READMED.md     # This file
 ├── gitignore
+'
 ---
 
 ## ⚙️ Installation
@@ -50,7 +51,7 @@ streamlit run app/ercot_lmp_app.py
 '''
 This will open the app in your browser (default: http://localhost:8501)
 
-📊 Exmaple Workflow
+###📊 Exmaple Workflow
 1. Select a node/bus/hub (e.g., HB_HOUSTON)
 2. Select DAM, RTM, or Both
 3. Choose a **start date** and **end date**
@@ -58,14 +59,15 @@ This will open the app in your browser (default: http://localhost:8501)
 5. View the interactive chart
 6. Download the dataset as a CSV
 
-🚦 Roadmap
+###🚦 Roadmap
 - [ ] Connect to live ERCOT DAM/RTM nodal price feeds
 - [ ] Add node autocomplete from ERCOT's node list
 - [ ] Overlay DAM vs RTM for comparison
 - [ ] Implement cachiong for faster repeat queries
 - [ ] Deploy to Streamlit Cloud or container environment
 
-🤝 Contributing
+###🤝 Contributing
+
 Contributions are welcome!
 - Fork the repo
 - create a feature branch (git checkout -b feature/my-feature)
@@ -73,9 +75,10 @@ Contributions are welcome!
 - Push to the branch (git push origin feature/my-feature)
 - Open a Pull Request
 
-📜 License
+###📜 License
+
 This project is license under the MIT License. See LICENSE for details.
 
-🖊️ Notes
+###🖊️ Notes
 - This project is for educational and research purposes.
 - ERCOT data is publically availabe but subject to ERCOT's terms of use
