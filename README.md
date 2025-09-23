@@ -29,10 +29,11 @@ ercot-lmp-viewer/
 ## ⚙️ Installation
 
 Clone the repository:
-'''bash
+
+```bash
 git clone https://github.com/patwelch/ercot-lmp-viewer.git
 cd ercot-lmp-viewer
-'''
+```
 
 Create and activate a virtual environment (recommended).
 
@@ -74,7 +75,7 @@ streamlit run app/ercot_lmp_app.py
 This opens the app in your browser (default: http://localhost:8501).
 
 
-###📊 Exmaple Workflow
+### 📊 Exmaple Workflow
 1. Select a node/bus/hub (e.g., HB_HOUSTON)
 2. Select DAM, RTM, or Both
 3. Choose a **start date** and **end date**
@@ -84,7 +85,7 @@ This opens the app in your browser (default: http://localhost:8501).
 
 ---
 
-###🚦 Roadmap
+### 🚦 Roadmap
 
 - [ ] Connect to live ERCOT DAM/RTM nodal price feeds
 - [ ] Add node autocomplete from ERCOT's node list
@@ -94,7 +95,7 @@ This opens the app in your browser (default: http://localhost:8501).
 
 ---
 
-###🤝 Contributing
+### 🤝 Contributing
 
 Contributions are welcome!
 - Fork the repo
@@ -105,12 +106,13 @@ Contributions are welcome!
 
 ---
 
-###📜 License
+### 📜 License
 
 This project is license under the MIT License. See LICENSE for details.
 
 ---
 
-###🖊️ Notes
+### 🖊️ Notes
+
 - This project is for educational and research purposes.
 - ERCOT data is publically availabe but subject to ERCOT's terms of use
