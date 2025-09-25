@@ -51,110 +51,93 @@ def get_ercot_token(username, password):
             st.json(e.response.json())
         return None
 
-def process_ercot_response(data, price_column_name):
+def process_and_normalize_data(df, price_column_name):
     """
-    A generic function to process the JSON response from ERCOT report APIs.
-    It creates, cleans, and sorts a DataFrame.
+    NEW: A flexible function that inspects the DataFrame and creates a standardized 'datetime' column.
+    Handles multiple ERCOT report formats.
     """
-    total_records = data.get("_meta", {}).get("totalRecords", 0)
-    if total_records == 0:
-        st.warning("API reported 0 total records for the given parameters.")
+    if df.empty:
         return pd.DataFrame()
 
-    column_names = [f["name"] for f in data.get("fields", []) if "name" in f]
-    records = data.get("data", [])
-
-    if not column_names or not records:
-        st.error("API response was missing column names ('fields') or data records ('data').")
-        return pd.DataFrame()
-
-    df = pd.DataFrame(records, columns=column_names)
-
-    if "deliveryDate" in df.columns and "hourEnding" in df.columns and price_column_name in df.columns:
-        try:
-            df[price_column_name] = pd.to_numeric(df[price_column_name], errors='coerce')
-            df['deliveryDate_dt'] = pd.to_datetime(df['deliveryDate'], errors='coerce')
+    try:
+        # Case 1: Real-time data with a full timestamp column
+        if 'SCEDTimestamp' in df.columns:
+            st.info("Detected 'SCEDTimestamp' column for real-time data.")
+            df['datetime'] = pd.to_datetime(df['SCEDTimestamp'], errors='coerce')
+        
+        # Case 2: DAM data with separate date and hour ending (e.g., '04:00')
+        elif 'deliveryDate' in df.columns and 'hourEnding' in df.columns:
+            st.info("Detected 'deliveryDate' and 'hourEnding' columns.")
             df['hour'] = df['hourEnding'].astype(str).str.split(':').str[0].astype(int)
-            df['datetime'] = df['deliveryDate_dt'] + pd.to_timedelta(df['hour'] - 1, unit='h')
-            df.dropna(subset=['datetime', price_column_name], inplace=True)
-            df.drop(columns=['deliveryDate_dt', 'hour'], inplace=True)
-            df.sort_values(by='datetime', inplace=True)
-            return df
-        except Exception as e:
-            st.error(f"Failed to process data columns. Error: {e}")
+            df['datetime'] = pd.to_datetime(df['deliveryDate'], errors='coerce') + pd.to_timedelta(df['hour'] - 1, unit='h')
+        
+        # Case 3: RTM data with separate date and delivery hour (e.g., 4)
+        elif 'deliveryDate' in df.columns and 'deliveryHour' in df.columns:
+            st.info("Detected 'deliveryDate' and 'deliveryHour' columns.")
+            df['hour'] = df['deliveryHour'].astype(int)
+            df['datetime'] = pd.to_datetime(df['deliveryDate'], errors='coerce') + pd.to_timedelta(df['hour'] - 1, unit='h')
+            
+        else:
+            st.error("Could not find a recognizable timestamp column ('SCEDTimestamp') or date/hour combination.")
+            st.write("Available columns:", df.columns.tolist())
             return pd.DataFrame()
-    else:
-        st.error(f"Necessary columns ('deliveryDate', 'hourEnding', '{price_column_name}') not found in data.")
-        st.write("Available columns:", df.columns.tolist())
-        return pd.DataFrame()
 
-def fetch_dam_lmp(access_token, subscription_key, node, start_date, end_date, page_size=5000):
-    """Fetch DAM hourly LMP data from ERCOT API."""
-    url = "https://api.ercot.com/api/public-reports/np4-183-cd/dam_hourly_lmp"
-    headers = {"Authorization": f"Bearer {access_token}", "Ocp-Apim-Subscription-Key": subscription_key}
-    params = {
-        "deliveryDateFrom": start_date.strftime("%Y-%m-%d"),
-        "deliveryDateTo": end_date.strftime("%Y-%m-%d"),
-        "busName": node, "size": page_size, "sort": "deliveryDate", "dir": "asc"
-    }
-    try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        return process_ercot_response(response.json(), 'LMP')
-    except requests.exceptions.RequestException as e:
-        st.error(f"API Request failed: {e}")
-        if e.response: st.json(e.response.json())
-        return pd.DataFrame()
-    
-def fetch_rtm_lmp(access_token, subscription_key, node, start_date, end_date, page_size=5000):
-    """Fetch RTM hourly LMP data from ERCOT API."""
-    url = "https://api.ercot.com/api/public-reports/np6-787-cd/lmp_electrical_bus"
-    headers = {"Authorization": f"Bearer {access_token}", "Ocp-Apim-Subscription-Key": subscription_key}
-    params = {
-        "SCEDTimestampFrom": start_date.strftime("%Y-%m-%d"),
-        "SCEDTimestampTo": end_date.strftime("%Y-%m-%d"),
-        "electricalBus": node, "size": page_size, "sort": "SCEDTimestamp", "dir": "asc"
-    }
-    try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        return process_ercot_response(response.json(), 'LMP')
-    except requests.exceptions.RequestException as e:
-        st.error(f"API Request failed: {e}")
-        if e.response: st.json(e.response.json())
-        return pd.DataFrame()
+        # Standard processing for all cases
+        df[price_column_name] = pd.to_numeric(df[price_column_name], errors='coerce')
+        df.dropna(subset=['datetime', price_column_name], inplace=True)
+        df.sort_values(by='datetime', inplace=True)
+        
+        # Keep only the essential columns for the final output
+        essential_columns = ['datetime', price_column_name] + [col for col in ['settlementPoint', 'busName', 'electricalBus'] if col in df.columns]
+        return df[essential_columns]
 
-def fetch_dam_spp(access_token, subscription_key, settlement_point, start_date, end_date, page_size=5000):
-    """Fetch DAM Settlement Point Prices from ERCOT API."""
-    url = "https://api.ercot.com/api/public-reports/np4-190-cd/dam_stlmnt_pnt_prices"
-    headers = {"Authorization": f"Bearer {access_token}", "Ocp-Apim-Subscription-Key": subscription_key}
-    params = {
-        "deliveryDateFrom": start_date.strftime("%Y-%m-%d"),
-        "deliveryDateTo": end_date.strftime("%Y-%m-%d"),
-        "settlementPoint": settlement_point, "size": page_size, "sort": "deliveryDate", "dir": "asc"
-    }
-    try:
-        response = requests.get(url, headers=headers, params=params)
-        response.raise_for_status()
-        return process_ercot_response(response.json(), 'settlementPointPrice')
     except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
-        st.text(traceback.format_exc())
+        st.error(f"Failed during data normalization. Error: {e}")
         return pd.DataFrame()
     
-def fetch_spp(access_token, subscription_key, settlement_point, start_date, end_date, page_size=5000):
-    """Fetch Settlement Point Prices from ERCOT API."""
-    url = "https://api.ercot.com/api/public-reports/np6-905-cd/spp_node_zone_hub"
-    headers = {"Authorization": f"Bearer {access_token}", "Ocp-Apim-Subscription-Key": subscription_key}
-    params = {
-        "deliveryDateFrom": start_date.strftime("%Y-%m-%d"),
-        "deliveryDateTo": end_date.strftime("%Y-%m-%d"),
-        "settlementPoint": settlement_point, "size": page_size, "sort": "deliveryDate", "dir": "asc"
-    }
+def resample_to_hourly_average(df, price_column_name):
+    """
+    Resamples a DataFrame with a 'datetime' column to hourly frequency,
+    calculating the mean of the specified price column.
+    """
+    st.info("Resampling 15-minute data to hourly averages...")
+    if df.empty or 'datetime' not in df.columns:
+        return pd.DataFrame()
+    
+    # Set 'datetime' as the index to perform time-series resampling
+    df_resampled = df.set_index('datetime')
+    
+    # Resample to hourly ('H') frequency and calculate the mean
+    df_resampled = df_resampled[price_column_name].resample('H').mean().reset_index()
+    
+    return df_resampled
+    
+def fetch_api_data(url, headers, params, price_column):
+    """A generic function to fetch and process data from an ERCOT endpoint."""
     try:
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
-        return process_ercot_response(response.json(), 'settlementPointPrice')
+        data = response.json()
+        
+        total_records = data.get("_meta", {}).get("totalRecords", 0)
+        if total_records == 0:
+            st.warning("API reported 0 total records for the given parameters.")
+            return pd.DataFrame()
+
+        column_names = [f["name"] for f in data.get("fields", []) if "name" in f]
+        records = data.get("data", [])
+
+        if not column_names or not records:
+            st.error("API response was missing column names ('fields') or data records ('data').")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(records, columns=column_names)
+        return process_and_normalize_data(df, price_column)
+
+    except requests.exceptions.RequestException as e:
+        st.error(f"API Request failed: {e}")
+        if e.response: st.json(e.response.json())
+        return pd.DataFrame()
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
         st.text(traceback.format_exc())
@@ -174,22 +157,14 @@ except (FileNotFoundError, KeyError) as e:
 
 st.sidebar.header("Data Selection")
 
-# 1. NEW: A selector to choose which report/API to call
 report_type = st.sidebar.selectbox(
     "Select Report Type:",
-    ("DAM - LMPs (by Bus)", "DAM - SPP", "RT - SPP", "RTM - LMPs (by Bus)"),
+    ("DAM - LMPs (by Bus)", "DAM - SPP", "RTM - SPP", "RTM - LMPs (by Bus)"),
     key="report_selector"
 )
 
-# 2. NEW: Dynamic label for the text input
-if 'LMP' in report_type:
-    input_label = "Enter Bus Name:"
-    default_node = "AEEC"
-elif 'RT' in report_type:
-    input_label = "Enter Settlement Point:"
-    default_node = "HB_HOUSTON"
-elif 'RTM' in report_type:
-    input_label = "Enter Bus Name:"
+if "LMP" in report_type:
+    input_label = "Enter Electrical Bus:"
     default_node = "AEEC"
 else: # For SPP
     input_label = "Enter Settlement Point:"
@@ -211,37 +186,54 @@ if st.sidebar.button("Fetch Data"):
         df = pd.DataFrame()
         price_column = None
         report_name = ""
+        url = ""
+        params = {}
+        needs_hourly_resampling = False
+        headers = {"Authorization": f"Bearer {st.session_state.ercot_access_token}", "Ocp-Apim-Subscription-Key": ERCOT_SUBSCRIPTION_KEY}
 
         with st.spinner(f"Fetching data for {location_input} from {start_date} to {end_date}..."):
-            # 3. NEW: Conditional logic to call the correct function
+            start_str = start_date.strftime("%Y-%m-%d")
+            end_str = end_date.strftime("%Y-%m-%d")
+
             if report_type == "DAM - LMPs (by Bus)":
-                df = fetch_dam_lmp(
-                    st.session_state.ercot_access_token,
-                    ERCOT_SUBSCRIPTION_KEY,
-                    location_input,
-                    start_date,
-                    end_date
-                )
                 price_column = 'LMP'
-                report_name = 'LMP'
+                report_name = 'DAM_LMP'
+                url = "https://api.ercot.com/api/public-reports/np4-183-cd/dam_hourly_lmp"
+                params = {"deliveryDateFrom": start_str, "deliveryDateTo": end_str, "busName": location_input, "size": 5000}
 
             elif report_type == "DAM - SPP":
-                df = fetch_dam_spp(
-                    st.session_state.ercot_access_token,
-                    ERCOT_SUBSCRIPTION_KEY,
-                    location_input,
-                    start_date,
-                    end_date
-                )
                 price_column = 'settlementPointPrice'
-                report_name = 'SPP'
+                report_name = 'DAM_SPP'
+                url = "https://api.ercot.com/api/public-reports/np4-190-cd/dam_stlmnt_pnt_prices"
+                params = {"deliveryDateFrom": start_str, "deliveryDateTo": end_str, "settlementPoint": location_input, "size": 5000}
+
+            elif report_type == "RTM - LMPs (by Bus)":
+                price_column = 'LMP'
+                report_name = 'RTM_LMP'
+                url = "https://api.ercot.com/api/public-reports/np6-787-cd/lmp_electrical_bus"
+                params = {"SCEDTimestampFrom": start_str, "SCEDTimestampTo": end_str, "electricalBus": location_input, "size": 5000}
+
+            elif report_type == "RTM - SPP":
+                price_column = 'settlementPointPrice'
+                report_name = 'RTM_SPP_Avg'
+                url = "https://api.ercot.com/api/public-reports/np6-905-cd/spp_node_zone_hub"
+                params = {"deliveryDateFrom": start_str, "deliveryDateTo": end_str, "settlementPoint": location_input, "size": 5000}
+                needs_hourly_resampling = True
+            
+            if url:
+                df = fetch_api_data(url, headers, params, price_column)
         
-        # 4. NEW: Common logic for handling the results
+        if not df.empty and needs_hourly_resampling:
+            df = resample_to_hourly_average(df, price_column)
+
         if df.empty:
-            st.warning("No data found for the given parameters.")
+            st.warning("No data found or processed for the given parameters.")
         else:
             st.subheader(f"Displaying {report_type} for {location_input}")
-            st.dataframe(df.head())
+            graph_title = f"{report_type} for {location_input}"
+            if needs_hourly_resampling:
+                graph_title = f"Hourly Average {report_type} for {location_input}"
+            st.dataframe(df)
 
             fig = px.line(df, x="datetime", y=price_column, title=f"{report_type} for {location_input}")
             st.plotly_chart(fig, use_container_width=True)
