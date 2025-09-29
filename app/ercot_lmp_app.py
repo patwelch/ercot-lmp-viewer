@@ -14,6 +14,112 @@ st.title("ERCOT Price Viewer")
 # --- Session State Initialization ---
 if 'ercot_access_token' not in st.session_state:
     st.session_state.ercot_access_token = None
+if 'data' not in st.session_state:
+    st.session_state.data = pd.DataFrame()
+if 'price_column' not in st.session_state:
+    st.session_state.price_column = None
+if 'report_type' not in st.session_state:
+    st.session_state.report_type = ""
+if 'location_input' not in st.session_state:
+    st.session_state.location_input = ""
+if 'show_analysis' not in st.session_state:
+    st.session_state.show_analysis = False
+
+REPORT_CONFIG = {
+    "DAM - LMPs (by Bus)": {
+        "url": "https://api.ercot.com/api/public-reports/np4-183-cd/dam_hourly_lmp",
+        "price_column": "LMP",
+        "location_param": "busName",
+        "date_param_prefix": "deliveryDate" # For deliveryDateFrom/To
+    },
+    "DAM - SPP": {
+        "url": "https://api.ercot.com/api/public-reports/np4-190-cd/dam_stlmnt_pnt_prices",
+        "price_column": "settlementPointPrice",
+        "location_param": "settlementPoint",
+        "date_param_prefix": "deliveryDate"
+    },
+    "RTM - LMPs (by Bus)": {
+        "url": "https://api.ercot.com/api/public-reports/np6-787-cd/lmp_electrical_bus",
+        "price_column": "LMP",
+        "location_param": "electricalBus",
+        "date_param_prefix": "SCEDTimestamp" # For SCEDTimestampFrom/To
+    },
+    "RTM - SPP": {
+        "url": "https://api.ercot.com/api/public-reports/np6-905-cd/spp_node_zone_hub",
+        "price_column": "settlementPointPrice",
+        "location_param": "settlementPoint",
+        "date_param_prefix": "deliveryDate",
+        "resample": True # Flag for resampling
+    }
+}
+
+def display_statistical_analysis(df, price_column):
+    """
+    Calculates and displays advanced statistical analysis of the price data,
+    with an option to filter for solar hours.
+    """
+    st.subheader(f"Statistical Analysis for {st.session_state.report_type}")
+    
+    # --- NEW: Radio button to select the analysis period ---
+    analysis_period = st.radio(
+        "Select Analysis Period:",
+        ("Full Day (24 hours)", "Solar Hours (HE 7-18)"),
+        key="analysis_period_selector",
+        horizontal=True
+    )
+    
+    # --- NEW: Filter the dataframe based on the selection ---
+    df_filtered = df.copy() # Work with a copy to avoid modifying the original
+    period_label = "(Full Day)"
+    
+    if analysis_period == "Solar Hours (HE 7-18)":
+        # Hour Ending 7 is hour 6 (6:00-6:59). Hour Ending 18 is hour 17 (17:00-17:59).
+        solar_hours = range(6, 18) # This is hours 6 through 17
+        df_filtered = df_filtered[df_filtered['datetime'].dt.hour.isin(solar_hours)]
+        period_label = "(Solar Hours)"
+
+    # --- NEW: Check if there's any data left after filtering ---
+    if df_filtered.empty:
+        st.warning(f"No data available for the selected period: {analysis_period}")
+        return # Stop the function if no data
+        
+    # --- Key Metrics (now using the filtered dataframe) ---
+    st.markdown(f"#### Summary Statistics {period_label}")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Mean Price", f"${df_filtered[price_column].mean():.2f}")
+    col2.metric("Median Price", f"${df_filtered[price_column].median():.2f}")
+    col3.metric("Highest Price", f"${df_filtered[price_column].max():.2f}")
+    col4.metric("Lowest Price", f"${df_filtered[price_column].min():.2f}")
+    
+    st.write("---")
+    st.markdown(f"#### Price Distribution {period_label}")
+    
+    # --- Histogram (now using the filtered dataframe) ---
+    fig_hist = px.histogram(
+        df_filtered,
+        x=price_column,
+        marginal="box",
+        title=f"Distribution of Prices {period_label} for {st.session_state.location_input}",
+        labels={price_column: "Price ($)"}
+    )
+    st.plotly_chart(fig_hist, use_container_width=True)
+
+    # --- Hourly Average Price Analysis (now using the filtered dataframe) ---
+    st.write("---")
+    st.markdown(f"#### Average Price by Hour of Day {period_label}")
+    
+    # This part still works correctly because df_filtered will only contain the relevant hours
+    df_filtered['hour'] = df_filtered['datetime'].dt.hour
+    hourly_avg = df_filtered.groupby('hour')[price_column].mean().reset_index()
+    
+    fig_hourly = px.bar(
+        hourly_avg,
+        x='hour',
+        y=price_column,
+        title=f"Average Price by Hour {period_label} for {st.session_state.location_input}",
+        labels={'hour': 'Hour of Day', price_column: 'Average Price ($)'}
+    )
+    st.plotly_chart(fig_hourly, use_container_width=True)
 
 # --- ERCOT API Communication ---
 
@@ -111,9 +217,15 @@ def resample_to_hourly_average(df, price_column_name):
     df_resampled = df_resampled[price_column_name].resample('H').mean().reset_index()
     
     return df_resampled
-    
-def fetch_api_data(url, headers, params, price_column):
+
+@st.cache_data   
+def fetch_api_data(url, headers, params, price_column, access_token, subscription_key):
     """A generic function to fetch and process data from an ERCOT endpoint."""
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Ocp-Apim-Subscription-Key": subscription_key
+    }
+
     try:
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
@@ -177,6 +289,8 @@ end_date = st.sidebar.date_input("End Date", date.today() - timedelta(days=1))
 # --- Main Application Logic ---
 if st.sidebar.button("Fetch Data"):
     # Authenticate if we don't have a token
+    st.session_state.show_analysis = False
+    st.session_state.data = pd.DataFrame() 
     if not st.session_state.ercot_access_token:
         with st.spinner('Authenticating with ERCOT...'):
             get_ercot_token(ERCOT_USERNAME, ERCOT_PASSWORD)
@@ -184,66 +298,58 @@ if st.sidebar.button("Fetch Data"):
     # Proceed only if authentication is successful
     if st.session_state.ercot_access_token:
         df = pd.DataFrame()
+        config = REPORT_CONFIG[report_type]
+        date_prefix = config["date_param_prefix"]
         price_column = None
         report_name = ""
         url = ""
-        params = {}
         needs_hourly_resampling = False
         headers = {"Authorization": f"Bearer {st.session_state.ercot_access_token}", "Ocp-Apim-Subscription-Key": ERCOT_SUBSCRIPTION_KEY}
-
-        with st.spinner(f"Fetching data for {location_input} from {start_date} to {end_date}..."):
-            start_str = start_date.strftime("%Y-%m-%d")
-            end_str = end_date.strftime("%Y-%m-%d")
-
-            if report_type == "DAM - LMPs (by Bus)":
-                price_column = 'LMP'
-                report_name = 'DAM_LMP'
-                url = "https://api.ercot.com/api/public-reports/np4-183-cd/dam_hourly_lmp"
-                params = {"deliveryDateFrom": start_str, "deliveryDateTo": end_str, "busName": location_input, "size": 5000}
-
-            elif report_type == "DAM - SPP":
-                price_column = 'settlementPointPrice'
-                report_name = 'DAM_SPP'
-                url = "https://api.ercot.com/api/public-reports/np4-190-cd/dam_stlmnt_pnt_prices"
-                params = {"deliveryDateFrom": start_str, "deliveryDateTo": end_str, "settlementPoint": location_input, "size": 5000}
-
-            elif report_type == "RTM - LMPs (by Bus)":
-                price_column = 'LMP'
-                report_name = 'RTM_LMP'
-                url = "https://api.ercot.com/api/public-reports/np6-787-cd/lmp_electrical_bus"
-                params = {"SCEDTimestampFrom": start_str, "SCEDTimestampTo": end_str, "electricalBus": location_input, "size": 5000}
-
-            elif report_type == "RTM - SPP":
-                price_column = 'settlementPointPrice'
-                report_name = 'RTM_SPP_Avg'
-                url = "https://api.ercot.com/api/public-reports/np6-905-cd/spp_node_zone_hub"
-                params = {"deliveryDateFrom": start_str, "deliveryDateTo": end_str, "settlementPoint": location_input, "size": 5000}
-                needs_hourly_resampling = True
+        params = {
+            f"{date_prefix}From": start_date.strftime("%Y-%m-%d"),
+            f"{date_prefix}To": end_date.strftime("%Y-%m-%d"),
+            config["location_param"]: location_input,
+            "size": 5000
+        }
             
-            if url:
-                df = fetch_api_data(url, headers, params, price_column)
+        df = fetch_api_data(config["url"], headers, params, config["price_column"], st.session_state.ercot_access_token, ERCOT_SUBSCRIPTION_KEY)
+        if not df.empty and config.get("resample", False):
+            df = resample_to_hourly_average(df, config["price_column"])
+
+        st.session_state.data = df
+        st.session_state.price_column = config["price_column"]
+        st.session_state.report_type = report_type
+        st.session_state.location_input = location_input
+
+# --- Display Data ---
+if not st.session_state.data.empty:
+    df = st.session_state.data
+    price_column = st.session_state.price_column
+    report_type = st.session_state.report_type
+    location_input = st.session_state.location_input
+
+    tab1, tab2 = st.tabs(["Time-Series Chart", "Statistical Analysis"])
+    
+    with tab1:
+        st.subheader(f"Displaying {report_type} for {location_input}")
         
-        if not df.empty and needs_hourly_resampling:
-            df = resample_to_hourly_average(df, price_column)
+        graph_title = f"{report_type} for {location_input}"
+        if "15-min" in report_type:
+            graph_title = f"Hourly Average {report_type} for {location_input}"
+            
+        fig = px.line(df, x="datetime", y=price_column, title=graph_title)
+        st.plotly_chart(fig, use_container_width=True)
 
-        if df.empty:
-            st.warning("No data found or processed for the given parameters.")
-        else:
-            st.subheader(f"Displaying {report_type} for {location_input}")
-            graph_title = f"{report_type} for {location_input}"
-            if needs_hourly_resampling:
-                graph_title = f"Hourly Average {report_type} for {location_input}"
-            st.dataframe(df)
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download data as CSV",
+            data=csv,
+            file_name=f"{location_input}_{report_type.replace(' ', '_')}_{start_date}_to_{end_date}.csv",
+            mime="text/csv",
+        )
+    
+    with tab2:
+        display_statistical_analysis(df, price_column)
 
-            fig = px.line(df, x="datetime", y=price_column, title=f"{report_type} for {location_input}")
-            st.plotly_chart(fig, use_container_width=True)
-
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="Download data as CSV",
-                data=csv,
-                file_name=f"{location_input}_{report_name}_{start_date}_to_{end_date}.csv",
-                mime="text/csv",
-            )
-    else:
-        st.error("Authentication failed. Cannot fetch data.")
+elif st.session_state.data is None:
+    st.warning("No data found or processed for the given parameters.")
